@@ -246,9 +246,23 @@
       if (box) {
         box.name = name;
         renderBoxes();
-        renderList();
+        updateListItemName(state.selectedId, name);
         persist();
       }
+    }
+
+    function updateListItemName(id, name) {
+      const items = listEl.querySelectorAll('.item');
+      items.forEach(item => {
+        if (item.dataset.id === String(id)) {
+          const nameEl = item.querySelector('.item-name');
+          if (nameEl) nameEl.textContent = name;
+        }
+      });
+    }
+
+    function finishEditingName() {
+      saveHistory();
     }
 
     function deleteSelected() {
@@ -334,6 +348,7 @@
       state.boxes.forEach(box => {
         const item = document.createElement('div');
         item.className = `item ${box.id === state.selectedId ? 'active' : ''}`;
+        item.dataset.id = box.id;
 
         const nameEl = document.createElement('div');
         nameEl.className = 'item-name';
@@ -363,6 +378,13 @@
           inputName.type = 'text';
           inputName.value = box.name;
           inputName.addEventListener('input', (e) => updateSelectedName(e.target.value));
+          inputName.addEventListener('blur', finishEditingName);
+          inputName.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+              e.target.blur();
+            }
+          });
+          inputName.id = 'edit-name';
           group1.appendChild(label1);
           group1.appendChild(inputName);
 
