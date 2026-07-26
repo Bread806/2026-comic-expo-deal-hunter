@@ -77,7 +77,7 @@
       <div id="help">
         <strong>快捷鍵</strong><br>
         滾輪 = 縮放（以滑鼠為中心）<br>
-        空白鍵 + 拖曳 = 移動畫布<br>
+        中鍵 / 右鍵 + 拖曳 = 移動畫布<br>
         拖曳框 = 移動位置<br>
         拖曳把手 = 調整大小<br>
         方向鍵 = 微調 1px<br>
@@ -467,7 +467,9 @@
     }
 
     canvas.addEventListener('mousedown', (e) => {
+      // 中鍵（1）或右鍵（2）拖曳 = 移動畫布
       if (e.button === 1 || e.button === 2 || state.spaceDown) {
+        e.preventDefault();
         startPan(e);
         return;
       }
