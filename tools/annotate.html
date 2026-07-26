@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>漫博 2026 攤位標記工具</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; overflow: hidden; font-family: system-ui, -apple-system, "Microsoft JhengHei", sans-serif; }
+    #app { display: flex; height: 100vh; }
+    #sidebar { width: 320px; background: #fff; border-right: 1px solid #ddd; display: flex; flex-direction: column; }
+    #sidebar h1 { font-size: 18px; margin: 0; padding: 16px; border-bottom: 1px solid #eee; }
+    #list { flex: 1; overflow-y: auto; padding: 12px; }
+    .item { padding: 10px; border: 1px solid #eee; border-radius: 8px; margin-bottom: 8px; cursor: pointer; }
+    .item:hover, .item.active { background: #f3f4f6; }
+    .item-name { font-weight: 600; font-size: 14px; }
+    .item-coords { font-size: 12px; color: #666; margin-top: 4px; }
+    #controls { padding: 12px; border-top: 1px solid #eee; display: flex; gap: 8px; }
+    #controls button { flex: 1; padding: 10px; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; }
+    .btn-primary { background: #111; color: #fff; }
+    .btn-secondary { background: #eee; color: #111; }
+    #canvas-area { flex: 1; position: relative; overflow: hidden; background: #222; }
+    #canvas { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); transform-origin: center center; cursor: crosshair; }
+    #map-img { display: block; max-width: none; max-height: none; user-select: none; -webkit-user-drag: none; }
+    .bbox { position: absolute; border: 2px solid #3b82f6; background: rgba(59, 130, 246, 0.15); pointer-events: none; }
+    .bbox.selected { border-color: #f59e0b; background: rgba(245, 158, 11, 0.25); }
+    .bbox-label { position: absolute; top: -20px; left: 0; background: #3b82f6; color: #fff; font-size: 12px; padding: 2px 6px; border-radius: 4px; white-space: nowrap; }
+    .bbox.selected .bbox-label { background: #f59e0b; }
+    .dragging { border-color: #ef4444 !important; background: rgba(239, 68, 68, 0.2) !important; }
+    #help { position: absolute; top: 12px; left: 12px; background: rgba(0,0,0,0.7); color: #fff; padding: 10px 14px; border-radius: 8px; font-size: 13px; max-width: 300px; }
+    #zoom-controls { position: absolute; bottom: 16px; right: 16px; display: flex; gap: 8px; }
+    #zoom-controls button { width: 40px; height: 40px; border-radius: 50%; border: none; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.2); font-size: 20px; cursor: pointer; }
+    input[type="text"] { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
+    .form-group { margin-bottom: 10px; }
+    .form-group label { display: block; font-size: 12px; color: #666; margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="sidebar">
+      <h1>攤位標記工具</h1>
+      <div id="list"></div>
+      <div id="controls">
+        <button class="btn-secondary" onclick="copyJSON()">複製 JSON</button>
+        <button class="btn-primary" onclick="downloadJSON()">下載 JSON</button>
+      </div>
+    </div>
+    <div id="canvas-area">
+      <div id="help">
+        <strong>操作說明</strong><br>
+        • 滾輪縮放，拖曳移動<br>
+        • 在地圖上拖曳框選攤位<br>
+        • 點左側清單編輯名稱<br>
+        • Delete / Backspace 刪除選取
+      </div>
+      <div id="canvas">
+        <img id="map-img" src="../public/map.jpg" alt="漫博地圖">
+      </div>
+      <div id="zoom-controls">
+        <button onclick="zoomBy(-0.2)">−</button>
+        <button onclick="zoomBy(0.2)">+</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const img = document.getElementById('map-img');
+    const canvas = document.getElementById('canvas');
+    const listEl = document.getElementById('list');
+    const state = {
+      scale: 0.6,
+      panX: 0,
+      panY: 0,
+      isPanning: false,
+      isDrawing: false,
+      startX: 0,
+      startY: 0,
+      boxes: [],
+      selectedId: null,
+      naturalWidth: 0,
+      naturalHeight: 0,
+    };
+
+    function renderTransform() {
+      canvas.style.transform = `translate(calc(-50% + ${state.panX}px), calc(-50% + ${state.panY}px)) scale(${state.scale})`;
+    }
+
+    img.onload = () => {
+      state.naturalWidth = img.naturalWidth;
+      state.naturalHeight = img.naturalHeight;
+      renderBoxes();
+    };
+
+    function pxToPercent(x, y, w, h) {
+      return {
+        x: (x / state.naturalWidth) * 100,
+        y: (y / state.naturalHeight) * 100,
+        w: (w / state.naturalWidth) * 100,
+        h: (h / state.naturalHeight) * 100,
+      };
+    }
+
+    function getImagePoint(e) {
+      const rect = img.getBoundingClientRect();
+      return {
+        x: (e.clientX - rect.left) / state.scale,
+        y: (e.clientY - rect.top) / state.scale,
+      };
+    }
+
+    function addBox(x, y, w, h) {
+      const id = state.boxes.length > 0 ? Math.max(...state.boxes.map(b => b.id)) + 1 : 1;
+      const pct = pxToPercent(x, y, w, h);
+      state.boxes.push({ id, name: `攤位 ${id}`, bbox: pct });
+      state.selectedId = id;
+      renderBoxes();
+      renderList();
+    }
+
+    function updateSelectedName(name) {
+      const box = state.boxes.find(b => b.id === state.selectedId);
+      if (box) {
+        box.name = name;
+        renderBoxes();
+        renderList();
+      }
+    }
+
+    function deleteSelected() {
+      if (!state.selectedId) return;
+      state.boxes = state.boxes.filter(b => b.id !== state.selectedId);
+      state.selectedId = null;
+      renderBoxes();
+      renderList();
+    }
+
+    function selectBox(id) {
+      state.selectedId = id;
+      renderBoxes();
+      renderList();
+    }
+
+    function renderBoxes() {
+      document.querySelectorAll('.bbox').forEach(el => el.remove());
+      state.boxes.forEach(box => {
+        const el = document.createElement('div');
+        el.className = `bbox ${box.id === state.selectedId ? 'selected' : ''}`;
+        el.style.left = `${box.bbox.x}%`;
+        el.style.top = `${box.bbox.y}%`;
+        el.style.width = `${box.bbox.w}%`;
+        el.style.height = `${box.bbox.h}%`;
+        el.innerHTML = `&lt;div class="bbox-label"&gt;${escapeHtml(box.name)}&lt;/div&gt;`;
+        el.addEventListener('mousedown', (e) => {
+          e.stopPropagation();
+          selectBox(box.id);
+        });
+        canvas.appendChild(el);
+      });
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    function renderList() {
+      listEl.innerHTML = '';
+      state.boxes.forEach(box => {
+        const item = document.createElement('div');
+        item.className = `item ${box.id === state.selectedId ? 'active' : ''}`;
+        item.innerHTML = `
+          &lt;div class="item-name"&gt;${escapeHtml(box.name)}&lt;/div&gt;
+          &lt;div class="item-coords"&gt;${box.bbox.x.toFixed(2)}%, ${box.bbox.y.toFixed(2)}%, ${box.bbox.w.toFixed(2)}%, ${box.bbox.h.toFixed(2)}%&lt;/div&gt;
+        `;
+        item.addEventListener('click', () => selectBox(box.id));
+        listEl.appendChild(item);
+      });
+
+      if (state.selectedId) {
+        const box = state.boxes.find(b => b.id === state.selectedId);
+        if (box) {
+          const form = document.createElement('div');
+          form.className = 'item active';
+          form.innerHTML = `
+            &lt;div class="form-group"&gt;
+              &lt;label&gt;攤位名稱&lt;/label&gt;
+              &lt;input type="text" value="${escapeHtml(box.name)}" id="edit-name"&gt;
+            &lt;/div&gt;
+            &lt;div class="form-group"&gt;
+              &lt;label&gt;座標 (%)&lt;/label&gt;
+              &lt;input type="text" value="${box.bbox.x.toFixed(2)}, ${box.bbox.y.toFixed(2)}, ${box.bbox.w.toFixed(2)}, ${box.bbox.h.toFixed(2)}" readonly&gt;
+            &lt;/div&gt;
+          `;
+          form.querySelector('#edit-name').addEventListener('input', (e) => {
+            updateSelectedName(e.target.value);
+          });
+          listEl.appendChild(form);
+        }
+      }
+    }
+
+    function getExportData() {
+      return state.boxes.map((b, idx) => ({
+        id: idx + 1,
+        name: b.name,
+        bbox: {
+          x: Number(b.bbox.x.toFixed(2)),
+          y: Number(b.bbox.y.toFixed(2)),
+          w: Number(b.bbox.w.toFixed(2)),
+          h: Number(b.bbox.h.toFixed(2)),
+        },
+      }));
+    }
+
+    function copyJSON() {
+      const json = JSON.stringify(getExportData(), null, 2);
+      navigator.clipboard.writeText(json).then(() => alert('已複製 JSON'));
+    }
+
+    function downloadJSON() {
+      const json = JSON.stringify(getExportData(), null, 2);
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'booths.json';
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function zoomBy(delta) {
+      state.scale = Math.max(0.2, Math.min(3, state.scale + delta));
+      renderTransform();
+    }
+
+    canvas.addEventListener('mousedown', (e) => {
+      if (e.button === 1 || e.button === 2 || e.shiftKey) {
+        state.isPanning = true;
+        state.startX = e.clientX - state.panX;
+        state.startY = e.clientY - state.panY;
+        canvas.style.cursor = 'grabbing';
+        return;
+      }
+      const pt = getImagePoint(e);
+      state.isDrawing = true;
+      state.startX = pt.x;
+      state.startY = pt.y;
+
+      const preview = document.createElement('div');
+      preview.id = 'draw-preview';
+      preview.className = 'bbox dragging';
+      canvas.appendChild(preview);
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (state.isPanning) {
+        state.panX = e.clientX - state.startX;
+        state.panY = e.clientY - state.startY;
+        renderTransform();
+        return;
+      }
+      if (!state.isDrawing) return;
+      const pt = getImagePoint(e);
+      const x = Math.min(state.startX, pt.x);
+      const y = Math.min(state.startY, pt.y);
+      const w = Math.abs(pt.x - state.startX);
+      const h = Math.abs(pt.y - state.startY);
+      const preview = document.getElementById('draw-preview');
+      if (preview) {
+        const pct = pxToPercent(x, y, w, h);
+        preview.style.left = `${pct.x}%`;
+        preview.style.top = `${pct.y}%`;
+        preview.style.width = `${pct.w}%`;
+        preview.style.height = `${pct.h}%`;
+      }
+    });
+
+    window.addEventListener('mouseup', (e) => {
+      if (state.isPanning) {
+        state.isPanning = false;
+        canvas.style.cursor = 'crosshair';
+        return;
+      }
+      if (!state.isDrawing) return;
+      state.isDrawing = false;
+      const preview = document.getElementById('draw-preview');
+      if (preview) preview.remove();
+      const pt = getImagePoint(e);
+      const x = Math.min(state.startX, pt.x);
+      const y = Math.min(state.startY, pt.y);
+      const w = Math.abs(pt.x - state.startX);
+      const h = Math.abs(pt.y - state.startY);
+      if (w > 10 && h > 10) {
+        addBox(x, y, w, h);
+      }
+    });
+
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? -0.1 : 0.1;
+      state.scale = Math.max(0.2, Math.min(3, state.scale + delta));
+      renderTransform();
+    }, { passive: false });
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        const active = document.activeElement;
+        if (active && active.tagName === 'INPUT') return;
+        deleteSelected();
+      }
+    });
+
+    renderTransform();
+  </script>
+</body>
+</html>

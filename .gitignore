@@ -1,1 +1,19 @@
+# Vite env
+.env
+.env.*
+
+# Supabase
+.supabase/
+
+# Node
+dist/
+node_modules/
+*.local
+
+# macOS
 .DS_Store
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea
