@@ -67,8 +67,8 @@
           <button class="btn-secondary" onclick="redo()">重做 (Shift+Z)</button>
         </div>
         <div class="row">
+          <button id="pan-toggle" class="btn-secondary" onclick="togglePanMode()">移動畫布: 關</button>
           <button class="btn-secondary" onclick="fitImageToScreen()">適應畫面 (F)</button>
-          <button class="btn-danger" onclick="clearAll()">全部清除</button>
         </div>
         <input type="file" id="import-file" accept=".json" onchange="importJSON(event)">
       </div>
@@ -124,7 +124,10 @@
       history: [],
       historyIndex: -1,
       spaceDown: false,
+      panMode: false,
     };
+
+    const panToggleBtn = document.getElementById('pan-toggle');
 
     function saveHistory() {
       // remove redo steps
@@ -293,7 +296,8 @@
         el.appendChild(label);
 
         el.addEventListener('mousedown', (e) => {
-          if (state.spaceDown) {
+          if (state.spaceDown || state.panMode) {
+            e.stopPropagation();
             startPan(e);
             return;
           }
@@ -468,8 +472,8 @@
     }
 
     canvas.addEventListener('mousedown', (e) => {
-      // 中鍵（1）或右鍵（2）拖曳 = 移動畫布
-      if (e.button === 1 || e.button === 2 || state.spaceDown) {
+      // pan mode: single drag pans canvas
+      if (state.spaceDown || state.panMode || e.button === 1 || e.button === 2) {
         e.preventDefault();
         startPan(e);
         return;
@@ -670,7 +674,13 @@
       if (e.code === 'Space') {
         e.preventDefault();
         state.spaceDown = true;
-        canvas.style.cursor = 'grab';
+        updateCursor();
+        return;
+      }
+
+      if (e.key.toLowerCase() === 'p') {
+        e.preventDefault();
+        togglePanMode();
         return;
       }
 
@@ -742,9 +752,25 @@
     window.addEventListener('keyup', (e) => {
       if (e.code === 'Space') {
         state.spaceDown = false;
-        canvas.style.cursor = 'crosshair';
+        updateCursor();
       }
     });
+
+    function togglePanMode() {
+      state.panMode = !state.panMode;
+      panToggleBtn.textContent = state.panMode ? '移動畫布: 開' : '移動畫布: 關';
+      panToggleBtn.className = state.panMode ? 'btn-primary' : 'btn-secondary';
+      updateCursor();
+      showToast(state.panMode ? '單指拖曳 = 移動畫布' : '單指拖曳 = 框選/移動攤位');
+    }
+
+    function updateCursor() {
+      if (state.spaceDown || state.panMode) {
+        canvas.style.cursor = 'grab';
+      } else {
+        canvas.style.cursor = 'crosshair';
+      }
+    }
 
     loadPersist();
     if (state.boxes.length > 0 && state.naturalWidth) {
