@@ -76,9 +76,10 @@
     <div id="canvas-area">
       <div id="help">
         <strong>快捷鍵</strong><br>
-        滾輪 = 縮放（以滑鼠為中心）<br>
-        中鍵 / 右鍵 + 拖曳 = 移動畫布<br>
-        拖曳框 = 移動位置<br>
+        單指點按 / 拖曳 = 框選或移動攤位<br>
+        兩指拖曳 = 移動畫布<br>
+        兩指捏合 = 縮放<br>
+        滾輪 = 縮放（滑鼠）<br>
         拖曳把手 = 調整大小<br>
         方向鍵 = 微調 1px<br>
         C = 複製框大小，V = 貼上大小<br>
@@ -486,6 +487,66 @@
       preview.id = 'draw-preview';
       preview.className = 'bbox dragging';
       canvas.appendChild(preview);
+    });
+
+    // Trackpad two-finger pan / pinch zoom
+    let lastTouchDistance = 0;
+    let lastTouchCenter = null;
+    let isTouchPanning = false;
+
+    canvas.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 1) {
+        // single finger handled by mouse events via browser emulation
+        return;
+      }
+      if (e.touches.length === 2) {
+        e.preventDefault();
+        isTouchPanning = true;
+        const t1 = e.touches[0];
+        const t2 = e.touches[1];
+        lastTouchDistance = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+        lastTouchCenter = {
+          x: (t1.clientX + t2.clientX) / 2,
+          y: (t1.clientY + t2.clientY) / 2,
+        };
+      }
+    }, { passive: false });
+
+    canvas.addEventListener('touchmove', (e) => {
+      if (e.touches.length === 2 && isTouchPanning) {
+        e.preventDefault();
+        const t1 = e.touches[0];
+        const t2 = e.touches[1];
+        const distance = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+        const center = {
+          x: (t1.clientX + t2.clientX) / 2,
+          y: (t1.clientY + t2.clientY) / 2,
+        };
+
+        // pinch zoom
+        if (lastTouchDistance > 0) {
+          const delta = (distance - lastTouchDistance) / 300;
+          zoomAt(center.x - area.getBoundingClientRect().left, center.y - area.getBoundingClientRect().top, delta);
+        }
+
+        // two-finger pan
+        if (lastTouchCenter) {
+          state.panX += center.x - lastTouchCenter.x;
+          state.panY += center.y - lastTouchCenter.y;
+          renderTransform();
+        }
+
+        lastTouchDistance = distance;
+        lastTouchCenter = center;
+      }
+    }, { passive: false });
+
+    canvas.addEventListener('touchend', (e) => {
+      if (e.touches.length < 2) {
+        isTouchPanning = false;
+        lastTouchDistance = 0;
+        lastTouchCenter = null;
+      }
     });
 
     window.addEventListener('mousemove', (e) => {
