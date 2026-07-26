@@ -15,7 +15,8 @@
     .item:hover, .item.active { background: #f3f4f6; }
     .item-name { font-weight: 600; font-size: 14px; }
     .item-coords { font-size: 12px; color: #666; margin-top: 4px; }
-    #controls { padding: 12px; border-top: 1px solid #eee; display: flex; gap: 8px; }
+    #controls { padding: 12px; border-top: 1px solid #eee; display: flex; flex-direction: column; gap: 8px; }
+    #controls .row { display: flex; gap: 8px; }
     #controls button { flex: 1; padding: 10px; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; }
     .btn-primary { background: #111; color: #fff; }
     .btn-secondary { background: #eee; color: #111; }
@@ -30,7 +31,7 @@
     #help { position: absolute; top: 12px; left: 12px; background: rgba(0,0,0,0.7); color: #fff; padding: 10px 14px; border-radius: 8px; font-size: 13px; max-width: 300px; }
     #zoom-controls { position: absolute; bottom: 16px; right: 16px; display: flex; gap: 8px; }
     #zoom-controls button { width: 40px; height: 40px; border-radius: 50%; border: none; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.2); font-size: 20px; cursor: pointer; }
-    input[type="text"] { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
+    input[type="text"], input[type="file"] { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
     .form-group { margin-bottom: 10px; }
     .form-group label { display: block; font-size: 12px; color: #666; margin-bottom: 4px; }
   </style>
@@ -40,13 +41,12 @@
     <div id="sidebar">
       <h1>攤位標記工具</h1>
       <div id="list"></div>
-      <div id="controls" style="flex-direction: column;">
-        <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+      <div id="controls">
+        <div class="row">
           <button class="btn-secondary" onclick="copyJSON()">複製 JSON</button>
           <button class="btn-primary" onclick="downloadJSON()">下載 JSON</button>
         </div>
-        <input type="file" id="import-file" accept=".json" style="display: none;" onchange="importJSON(event)">
-        <button class="btn-secondary" onclick="document.getElementById('import-file').click()">匯入 JSON</button>
+        <input type="file" id="import-file" accept=".json" onchange="importJSON(event)">
       </div>
     </div>
     <div id="canvas-area">
@@ -89,11 +89,14 @@
       canvas.style.transform = `translate(calc(-50% + ${state.panX}px), calc(-50% + ${state.panY}px)) scale(${state.scale})`;
     }
 
-    img.onload = () => {
+    function onImageLoad() {
       state.naturalWidth = img.naturalWidth;
       state.naturalHeight = img.naturalHeight;
       renderBoxes();
-    };
+    }
+
+    img.onload = onImageLoad;
+    if (img.complete && img.naturalWidth) onImageLoad();
 
     function pxToPercent(x, y, w, h) {
       return {
@@ -145,9 +148,8 @@
     }
 
     function renderBoxes() {
-      // 只移除 bbox 元素，保留 map image
       document.querySelectorAll('.bbox').forEach(el => el.remove());
-      if (!img.naturalWidth || !img.naturalHeight) return;
+      if (!state.naturalWidth || !state.naturalHeight) return;
       state.boxes.forEach(box => {
         const el = document.createElement('div');
         el.className = `bbox ${box.id === state.selectedId ? 'selected' : ''}`;
@@ -155,7 +157,12 @@
         el.style.top = `${box.bbox.y}%`;
         el.style.width = `${box.bbox.w}%`;
         el.style.height = `${box.bbox.h}%`;
-        el.innerHTML = `&lt;div class="bbox-label"&gt;${escapeHtml(box.name)}&lt;/div&gt;`;
+
+        const label = document.createElement('div');
+        label.className = 'bbox-label';
+        label.textContent = box.name;
+        el.appendChild(label);
+
         el.addEventListener('mousedown', (e) => {
           e.stopPropagation();
           selectBox(box.id);
@@ -175,10 +182,17 @@
       state.boxes.forEach(box => {
         const item = document.createElement('div');
         item.className = `item ${box.id === state.selectedId ? 'active' : ''}`;
-        item.innerHTML = `
-          &lt;div class="item-name"&gt;${escapeHtml(box.name)}&lt;/div&gt;
-          &lt;div class="item-coords"&gt;${box.bbox.x.toFixed(2)}%, ${box.bbox.y.toFixed(2)}%, ${box.bbox.w.toFixed(2)}%, ${box.bbox.h.toFixed(2)}%&lt;/div&gt;
-        `;
+
+        const nameEl = document.createElement('div');
+        nameEl.className = 'item-name';
+        nameEl.textContent = box.name;
+
+        const coordsEl = document.createElement('div');
+        coordsEl.className = 'item-coords';
+        coordsEl.textContent = `${box.bbox.x.toFixed(2)}%, ${box.bbox.y.toFixed(2)}%, ${box.bbox.w.toFixed(2)}%, ${box.bbox.h.toFixed(2)}%`;
+
+        item.appendChild(nameEl);
+        item.appendChild(coordsEl);
         item.addEventListener('click', () => selectBox(box.id));
         listEl.appendChild(item);
       });
@@ -188,19 +202,31 @@
         if (box) {
           const form = document.createElement('div');
           form.className = 'item active';
-          form.innerHTML = `
-            &lt;div class="form-group"&gt;
-              &lt;label&gt;攤位名稱&lt;/label&gt;
-              &lt;input type="text" value="${escapeHtml(box.name)}" id="edit-name"&gt;
-            &lt;/div&gt;
-            &lt;div class="form-group"&gt;
-              &lt;label&gt;座標 (%)&lt;/label&gt;
-              &lt;input type="text" value="${box.bbox.x.toFixed(2)}, ${box.bbox.y.toFixed(2)}, ${box.bbox.w.toFixed(2)}, ${box.bbox.h.toFixed(2)}" readonly&gt;
-            &lt;/div&gt;
-          `;
-          form.querySelector('#edit-name').addEventListener('input', (e) => {
-            updateSelectedName(e.target.value);
-          });
+
+          const group1 = document.createElement('div');
+          group1.className = 'form-group';
+          const label1 = document.createElement('label');
+          label1.textContent = '攤位名稱';
+          const inputName = document.createElement('input');
+          inputName.type = 'text';
+          inputName.value = box.name;
+          inputName.addEventListener('input', (e) => updateSelectedName(e.target.value));
+          group1.appendChild(label1);
+          group1.appendChild(inputName);
+
+          const group2 = document.createElement('div');
+          group2.className = 'form-group';
+          const label2 = document.createElement('label');
+          label2.textContent = '座標 (%)';
+          const inputCoords = document.createElement('input');
+          inputCoords.type = 'text';
+          inputCoords.value = `${box.bbox.x.toFixed(2)}, ${box.bbox.y.toFixed(2)}, ${box.bbox.w.toFixed(2)}, ${box.bbox.h.toFixed(2)}`;
+          inputCoords.readOnly = true;
+          group2.appendChild(label2);
+          group2.appendChild(inputCoords);
+
+          form.appendChild(group1);
+          form.appendChild(group2);
           listEl.appendChild(form);
         }
       }
@@ -241,7 +267,12 @@
       const reader = new FileReader();
       reader.onload = (e) => {
         try {
-          const data = JSON.parse(e.target.result);
+          const text = e.target && e.target.result;
+          if (typeof text !== 'string') {
+            alert('讀取檔案失敗');
+            return;
+          }
+          const data = JSON.parse(text);
           if (!Array.isArray(data)) {
             alert('JSON 格式錯誤：應該是陣列');
             return;
@@ -252,21 +283,13 @@
             bbox: item.bbox || { x: 0, y: 0, w: 5, h: 5 },
           }));
           state.selectedId = state.boxes.length > 0 ? state.boxes[0].id : null;
-          // 確保圖片已載入再 render
-          if (img.complete && img.naturalWidth) {
-            renderBoxes();
-          } else {
-            img.onload = () => {
-              state.naturalWidth = img.naturalWidth;
-              state.naturalHeight = img.naturalHeight;
-              renderBoxes();
-            };
-          }
+          renderBoxes();
           renderList();
         } catch (err) {
           alert('JSON 解析失敗：' + err.message);
         }
       };
+      reader.onerror = () => alert('檔案讀取失敗');
       reader.readAsText(file);
     }
 
