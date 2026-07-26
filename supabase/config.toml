@@ -1,0 +1,10 @@
+project_id = "jnbcxtbqfaeyiraamssz"
+
+[api]
+enabled = true
+schemas = ["public", "storage", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[functions.update-prize]
+verify_jwt = false

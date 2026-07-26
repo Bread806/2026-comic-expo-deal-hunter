@@ -40,9 +40,13 @@
     <div id="sidebar">
       <h1>攤位標記工具</h1>
       <div id="list"></div>
-      <div id="controls">
-        <button class="btn-secondary" onclick="copyJSON()">複製 JSON</button>
-        <button class="btn-primary" onclick="downloadJSON()">下載 JSON</button>
+      <div id="controls" style="flex-direction: column;">
+        <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+          <button class="btn-secondary" onclick="copyJSON()">複製 JSON</button>
+          <button class="btn-primary" onclick="downloadJSON()">下載 JSON</button>
+        </div>
+        <input type="file" id="import-file" accept=".json" style="display: none;" onchange="importJSON(event)">
+        <button class="btn-secondary" onclick="document.getElementById('import-file').click()">匯入 JSON</button>
       </div>
     </div>
     <div id="canvas-area">
@@ -68,7 +72,7 @@
     const canvas = document.getElementById('canvas');
     const listEl = document.getElementById('list');
     const state = {
-      scale: 0.6,
+      scale: 0.45,
       panX: 0,
       panY: 0,
       isPanning: false,
@@ -227,6 +231,32 @@
       a.download = 'booths.json';
       a.click();
       URL.revokeObjectURL(url);
+    }
+
+    function importJSON(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = JSON.parse(e.target.result);
+          if (!Array.isArray(data)) {
+            alert('JSON 格式錯誤：應該是陣列');
+            return;
+          }
+          state.boxes = data.map((item, idx) => ({
+            id: item.id || idx + 1,
+            name: item.name || `攤位 ${idx + 1}`,
+            bbox: item.bbox || { x: 0, y: 0, w: 5, h: 5 },
+          }));
+          state.selectedId = state.boxes.length > 0 ? state.boxes[0].id : null;
+          renderBoxes();
+          renderList();
+        } catch (err) {
+          alert('JSON 解析失敗：' + err.message);
+        }
+      };
+      reader.readAsText(file);
     }
 
     function zoomBy(delta) {

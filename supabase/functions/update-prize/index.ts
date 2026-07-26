@@ -1,4 +1,5 @@
-import { createClient } from 'npm:@supabase/supabase-js@^2.110.8'
+import { withSupabase } from 'npm:@supabase/server@^1'
+import type { SupabaseClient } from 'npm:@supabase/supabase-js@^2.110.8'
 
 interface PrizePayload {
   id?: string
@@ -21,7 +22,7 @@ function getClientIp(req: Request): string {
 }
 
 async function checkRateLimit(
-  supabaseAdmin: ReturnType<typeof createClient>,
+  supabaseAdmin: SupabaseClient,
   ip: string
 ): Promise<void> {
   const windowStart = new Date(Date.now() - RATE_LIMIT_WINDOW_MS).toISOString()
@@ -42,112 +43,108 @@ async function checkRateLimit(
   }
 }
 
-Deno.serve(async (req: Request) => {
-  if (req.method !== 'POST') {
-    return new Response('Method not allowed', { status: 405 })
-  }
+export default {
+  fetch: withSupabase(
+    { auth: 'none' },
+    async (req: Request, ctx: { supabaseAdmin: SupabaseClient }) => {
+      if (req.method !== 'POST') {
+        return new Response('Method not allowed', { status: 405 })
+      }
 
-  const supabaseUrl = Deno.env.get('SUPABASE_URL')
-  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+      const supabaseAdmin = ctx.supabaseAdmin
 
-  if (!supabaseUrl || !serviceRoleKey) {
-    return new Response('Server misconfigured', { status: 500 })
-  }
+      let payload: PrizePayload
+      try {
+        payload = await req.json()
+      } catch {
+        return new Response('Invalid JSON', { status: 400 })
+      }
 
-  const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey, {
-    auth: { persistSession: false },
-  })
+      if (
+        !payload.booth_id ||
+        !payload.name?.trim() ||
+        !['free', 'conditional', 'none'].includes(payload.status)
+      ) {
+        return new Response('Missing required fields', { status: 400 })
+      }
 
-  let payload: PrizePayload
-  try {
-    payload = await req.json()
-  } catch {
-    return new Response('Invalid JSON', { status: 400 })
-  }
+      const ip = getClientIp(req)
 
-  if (
-    !payload.booth_id ||
-    !payload.name?.trim() ||
-    !['free', 'conditional', 'none'].includes(payload.status)
-  ) {
-    return new Response('Missing required fields', { status: 400 })
-  }
+      try {
+        await checkRateLimit(supabaseAdmin, ip)
+      } catch (err: any) {
+        if (err.message === 'RATE_LIMITED') {
+          return new Response(
+            JSON.stringify({ error: '操作太頻繁，請稍後再試' }),
+            { status: 429, headers: { 'Content-Type': 'application/json' } }
+          )
+        }
+        console.error('Rate limit error:', err)
+      }
 
-  const ip = getClientIp(req)
+      // Fetch existing prize if updating
+      let oldData: Record<string, unknown> | null = null
+      if (payload.id) {
+        const { data, error } = await supabaseAdmin
+          .from('prizes')
+          .select('*')
+          .eq('id', payload.id)
+          .single()
 
-  try {
-    await checkRateLimit(supabaseAdmin, ip)
-  } catch (err: any) {
-    if (err.message === 'RATE_LIMITED') {
+        if (error) {
+          return new Response(JSON.stringify({ error: error.message }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+
+        if (data) {
+          oldData = data
+        }
+      }
+
+      const upsertData = {
+        id: payload.id,
+        booth_id: payload.booth_id,
+        name: payload.name.trim(),
+        status: payload.status,
+        condition: payload.condition?.trim() || '',
+        quantity: payload.quantity?.trim() || '',
+        editor_name: payload.editor_name?.trim() || '',
+        note: payload.note?.trim() || '',
+      }
+
+      const { data: savedPrize, error: upsertError } = await supabaseAdmin
+        .from('prizes')
+        .upsert(upsertData, { onConflict: 'id' })
+        .select()
+        .single()
+
+      if (upsertError || !savedPrize) {
+        return new Response(
+          JSON.stringify({ error: upsertError?.message || 'Upsert failed' }),
+          { status: 500, headers: { 'Content-Type': 'application/json' } }
+        )
+      }
+
+      // Write history entry
+      const { error: historyError } = await supabaseAdmin.from('history').insert({
+        prize_id: savedPrize.id,
+        booth_id: payload.booth_id,
+        old_data: oldData,
+        new_data: savedPrize,
+        editor_name: payload.editor_name?.trim() || '',
+        ip,
+      })
+
+      if (historyError) {
+        console.error('History insert error:', historyError)
+      }
+
       return new Response(
-        JSON.stringify({ error: '操作太頻繁，請稍後再試' }),
-        { status: 429, headers: { 'Content-Type': 'application/json' } }
+        JSON.stringify({ success: true, data: savedPrize }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
       )
     }
-    console.error('Rate limit error:', err)
-  }
-
-  // Fetch existing prize if updating
-  let oldData: Record<string, unknown> | null = null
-  if (payload.id) {
-    const { data, error } = await supabaseAdmin
-      .from('prizes')
-      .select('*')
-      .eq('id', payload.id)
-      .single()
-
-    if (error) {
-      return new Response(JSON.stringify({ error: error.message }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    }
-
-    if (data) {
-      oldData = data
-    }
-  }
-
-  const upsertData = {
-    id: payload.id,
-    booth_id: payload.booth_id,
-    name: payload.name.trim(),
-    status: payload.status,
-    condition: payload.condition?.trim() || '',
-    quantity: payload.quantity?.trim() || '',
-    editor_name: payload.editor_name?.trim() || '',
-    note: payload.note?.trim() || '',
-  }
-
-  const { data: savedPrize, error: upsertError } = await supabaseAdmin
-    .from('prizes')
-    .upsert(upsertData, { onConflict: 'id' })
-    .select()
-    .single()
-
-  if (upsertError || !savedPrize) {
-    return new Response(
-      JSON.stringify({ error: upsertError?.message || 'Upsert failed' }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
-    )
-  }
-
-  // Write history entry
-  const { error: historyError } = await supabaseAdmin.from('history').insert({
-    prize_id: savedPrize.id,
-    booth_id: payload.booth_id,
-    old_data: oldData,
-    new_data: savedPrize,
-    editor_name: payload.editor_name?.trim() || '',
-    ip,
-  })
-
-  if (historyError) {
-    console.error('History insert error:', historyError)
-  }
-
-  return new Response(
-    JSON.stringify({ success: true, data: savedPrize }),
-    { status: 200, headers: { 'Content-Type': 'application/json' } }
-  )
-})
+  ),
+}
