@@ -471,14 +471,22 @@
       renderTransform();
     }
 
+    function isTargetDrawable(e) {
+      return e.target === canvas || e.target === img;
+    }
+
     canvas.addEventListener('mousedown', (e) => {
-      // pan mode: single drag pans canvas
-      if (state.spaceDown || state.panMode || e.button === 1 || e.button === 2) {
+      if (e.button === 1 || e.button === 2) {
         e.preventDefault();
         startPan(e);
         return;
       }
-      if (e.target !== canvas) return;
+      if (state.spaceDown || state.panMode) {
+        e.preventDefault();
+        startPan(e);
+        return;
+      }
+      if (!isTargetDrawable(e)) return;
 
       const pt = getImagePoint(e);
       state.isDrawing = true;
@@ -493,19 +501,34 @@
       canvas.appendChild(preview);
     });
 
-    // Trackpad two-finger pan / pinch zoom
+    // Trackpad / touch handling
     let lastTouchDistance = 0;
     let lastTouchCenter = null;
     let isTouchPanning = false;
+    let singleTouchId = null;
+    let singleTouchStart = null;
+    let singleTouchMoved = false;
 
     canvas.addEventListener('touchstart', (e) => {
       if (e.touches.length === 1) {
-        // single finger handled by mouse events via browser emulation
+        const t = e.touches[0];
+        singleTouchId = t.identifier;
+        singleTouchStart = { x: t.clientX, y: t.clientY, time: Date.now() };
+        singleTouchMoved = false;
+
+        if (state.spaceDown || state.panMode) {
+          e.preventDefault();
+          startPan({ clientX: t.clientX, clientY: t.clientY });
+          return;
+        }
+
+        // don't start drawing immediately; wait for touchmove to distinguish tap vs drag
         return;
       }
       if (e.touches.length === 2) {
         e.preventDefault();
         isTouchPanning = true;
+        singleTouchId = null;
         const t1 = e.touches[0];
         const t2 = e.touches[1];
         lastTouchDistance = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
@@ -517,6 +540,56 @@
     }, { passive: false });
 
     canvas.addEventListener('touchmove', (e) => {
+      if (e.touches.length === 1 && singleTouchId != null) {
+        const t = e.touches[0];
+        if (t.identifier !== singleTouchId) return;
+
+        const dx = t.clientX - singleTouchStart.x;
+        const dy = t.clientY - singleTouchStart.y;
+
+        if (state.isPanning) {
+          e.preventDefault();
+          state.panX = t.clientX - state.startX;
+          state.panY = t.clientY - state.startY;
+          renderTransform();
+          return;
+        }
+
+        // once moved enough, start drawing a box
+        if (!state.isDrawing && (Math.abs(dx) > 3 || Math.abs(dy) > 3)) {
+          singleTouchMoved = true;
+          state.selectedId = null;
+          renderAll();
+          const pt = getImagePoint({ clientX: singleTouchStart.x, clientY: singleTouchStart.y });
+          state.isDrawing = true;
+          state.startX = pt.x;
+          state.startY = pt.y;
+
+          const preview = document.createElement('div');
+          preview.id = 'draw-preview';
+          preview.className = 'bbox dragging';
+          canvas.appendChild(preview);
+        }
+
+        if (state.isDrawing) {
+          e.preventDefault();
+          const pt = getImagePoint(t);
+          const x = Math.min(state.startX, pt.x);
+          const y = Math.min(state.startY, pt.y);
+          const w = Math.abs(pt.x - state.startX);
+          const h = Math.abs(pt.y - state.startY);
+          const preview = document.getElementById('draw-preview');
+          if (preview) {
+            const pct = pxToPercent(x, y, w, h);
+            preview.style.left = `${pct.x}%`;
+            preview.style.top = `${pct.y}%`;
+            preview.style.width = `${pct.w}%`;
+            preview.style.height = `${pct.h}%`;
+          }
+        }
+        return;
+      }
+
       if (e.touches.length === 2 && isTouchPanning) {
         e.preventDefault();
         const t1 = e.touches[0];
@@ -527,13 +600,11 @@
           y: (t1.clientY + t2.clientY) / 2,
         };
 
-        // pinch zoom
         if (lastTouchDistance > 0) {
           const delta = (distance - lastTouchDistance) / 300;
           zoomAt(center.x - area.getBoundingClientRect().left, center.y - area.getBoundingClientRect().top, delta);
         }
 
-        // two-finger pan
         if (lastTouchCenter) {
           state.panX += center.x - lastTouchCenter.x;
           state.panY += center.y - lastTouchCenter.y;
@@ -546,6 +617,39 @@
     }, { passive: false });
 
     canvas.addEventListener('touchend', (e) => {
+      if (singleTouchId != null) {
+        const touch = Array.from(e.changedTouches).find(t => t.identifier === singleTouchId);
+        if (!touch) return;
+
+        if (state.isPanning) {
+          state.isPanning = false;
+          updateCursor();
+        }
+
+        if (state.isDrawing) {
+          state.isDrawing = false;
+          const preview = document.getElementById('draw-preview');
+          if (preview) preview.remove();
+          const pt = getImagePoint(touch);
+          const x = Math.min(state.startX, pt.x);
+          const y = Math.min(state.startY, pt.y);
+          const w = Math.abs(pt.x - state.startX);
+          const h = Math.abs(pt.y - state.startY);
+          if (w > 10 && h > 10) {
+            addBox(x, y, w, h);
+          }
+        } else if (!singleTouchMoved) {
+          // tap on canvas deselects
+          state.selectedId = null;
+          renderAll();
+        }
+
+        singleTouchId = null;
+        singleTouchStart = null;
+        singleTouchMoved = false;
+        return;
+      }
+
       if (e.touches.length < 2) {
         isTouchPanning = false;
         lastTouchDistance = 0;
