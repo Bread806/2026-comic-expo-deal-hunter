@@ -71,6 +71,7 @@
     const img = document.getElementById('map-img');
     const canvas = document.getElementById('canvas');
     const listEl = document.getElementById('list');
+    const area = document.getElementById('canvas-area');
     const state = {
       scale: 0.45,
       panX: 0,
@@ -92,11 +93,27 @@
     function onImageLoad() {
       state.naturalWidth = img.naturalWidth;
       state.naturalHeight = img.naturalHeight;
+      fitImageToScreen();
       renderBoxes();
     }
 
     img.onload = onImageLoad;
     if (img.complete && img.naturalWidth) onImageLoad();
+
+    window.addEventListener('resize', fitImageToScreen);
+
+    function fitImageToScreen() {
+      if (!state.naturalWidth || !state.naturalHeight) return;
+      const area = document.getElementById('canvas-area');
+      const availW = area.clientWidth;
+      const availH = area.clientHeight;
+      const scaleX = availW / state.naturalWidth;
+      const scaleY = availH / state.naturalHeight;
+      state.scale = Math.min(scaleX, scaleY) * 0.95;
+      state.panX = 0;
+      state.panY = 0;
+      renderTransform();
+    }
 
     function pxToPercent(x, y, w, h) {
       return {
@@ -294,7 +311,22 @@
     }
 
     function zoomBy(delta) {
-      state.scale = Math.max(0.2, Math.min(3, state.scale + delta));
+      const cx = area.clientWidth / 2;
+      const cy = area.clientHeight / 2;
+      zoomAt(cx, cy, delta);
+    }
+
+    function zoomAt(screenX, screenY, delta) {
+      const oldScale = state.scale;
+      const newScale = Math.max(0.1, Math.min(5, state.scale + delta));
+
+      // point in image coordinates before zoom (relative to center)
+      const imgX = (screenX - area.clientWidth / 2 - state.panX) / oldScale;
+      const imgY = (screenY - area.clientHeight / 2 - state.panY) / oldScale;
+
+      state.panX = (screenX - area.clientWidth / 2) - imgX * newScale;
+      state.panY = (screenY - area.clientHeight / 2) - imgY * newScale;
+      state.scale = newScale;
       renderTransform();
     }
 
@@ -364,9 +396,8 @@
 
     canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
-      const delta = e.deltaY > 0 ? -0.1 : 0.1;
-      state.scale = Math.max(0.2, Math.min(3, state.scale + delta));
-      renderTransform();
+      const delta = e.deltaY > 0 ? -0.15 : 0.15;
+      zoomAt(e.clientX - area.getBoundingClientRect().left, e.clientY - area.getBoundingClientRect().top, delta);
     }, { passive: false });
 
     window.addEventListener('keydown', (e) => {
