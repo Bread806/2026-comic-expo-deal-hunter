@@ -2,158 +2,43 @@
 import { ref, watch } from 'vue'
 import type { Prize, PrizeStatus } from '../types'
 
-const props = defineProps<{
-  boothId: number
-  initialPrize?: Prize | null
-}>()
-
-const emit = defineEmits<{
-  save: [prize: Omit<Prize, 'id' | 'created_at' | 'updated_at'>]
-  cancel: []
-}>()
+const props = defineProps<{ boothId: number; initialPrize?: Prize | null }>()
+const emit = defineEmits<{ save: [prize: Omit<Prize, 'id' | 'created_at' | 'updated_at'>]; cancel: [] }>()
 
 const name = ref('')
 const status = ref<PrizeStatus>('free')
 const condition = ref('')
 const quantity = ref('')
 const editorName = ref('')
-const note = ref('')
 
-watch(
-  () => props.initialPrize,
-  (p) => {
-    if (p) {
-      name.value = p.name
-      status.value = p.status
-      condition.value = p.condition
-      quantity.value = p.quantity
-      editorName.value = p.editor_name
-      note.value = ''
-    } else {
-      name.value = ''
-      status.value = 'free'
-      condition.value = ''
-      quantity.value = ''
-      editorName.value = ''
-      note.value = ''
-    }
-  },
-  { immediate: true }
-)
+watch(() => props.initialPrize, (prize) => {
+  name.value = prize?.name ?? ''
+  status.value = prize?.status ?? 'free'
+  condition.value = prize?.condition ?? ''
+  quantity.value = prize?.quantity ?? ''
+  editorName.value = prize?.editor_name ?? ''
+}, { immediate: true })
 
 function submit() {
   if (!name.value.trim()) return
-  emit('save', {
-    booth_id: props.boothId,
-    name: name.value.trim(),
-    status: status.value,
-    condition: condition.value.trim(),
-    quantity: quantity.value.trim(),
-    editor_name: editorName.value.trim(),
-  })
+  emit('save', { booth_id: props.boothId, name: name.value.trim(), status: status.value, condition: condition.value.trim(), quantity: quantity.value.trim(), editor_name: editorName.value.trim() })
 }
 </script>
 
 <template>
-  <form @submit.prevent="submit" class="space-y-4">
-    <div>
-      <label class="block text-sm font-medium text-gray-700 mb-1">獎品名稱 *</label>
-      <input
-        v-model="name"
-        type="text"
-        placeholder="例如：免費明信片、追蹤 IG 送貼紙"
-        class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
-        required
-      />
+  <form class="prize-form" @submit.prevent="submit">
+    <p class="form-intro">{{ initialPrize ? '更新現場情報' : '回報一筆現場情報' }}</p>
+    <label class="form-field"><span>贈品名稱 <b>*</b></span><input v-model="name" type="text" placeholder="例如：角色明信片、試閱小冊" required /></label>
+    <fieldset class="status-fieldset"><legend>取得方式 <b>*</b></legend><div class="status-options">
+      <label v-for="item in [{ value: 'free', label: '免費', note: '直接索取' }, { value: 'conditional', label: '有條件', note: '消費／互動' }, { value: 'none', label: '暫無', note: '暫不提供' } ]" :key="item.value" class="status-option">
+        <input v-model="status" type="radio" :value="item.value" /><span><strong>{{ item.label }}</strong><small>{{ item.note }}</small></span>
+      </label>
+    </div></fieldset>
+    <label class="form-field"><span>條件／領取方式{{ status === 'conditional' ? ' *' : '' }}</span><textarea v-model="condition" rows="3" :required="status === 'conditional'" placeholder="例如：消費滿 300 元，或出示追蹤畫面" /></label>
+    <div class="form-grid">
+      <label class="form-field"><span>數量／備註</span><input v-model="quantity" type="text" placeholder="例如：每日 100 份" /></label>
+      <label class="form-field"><span>回報者名稱</span><input v-model="editorName" type="text" placeholder="暱稱即可" /></label>
     </div>
-
-    <div>
-      <label class="block text-sm font-medium text-gray-700 mb-1">狀態 *</label>
-      <div class="flex gap-2">
-        <label
-          v-for="s in [
-            { value: 'free', label: '無條件免費', color: 'bg-free' },
-            { value: 'conditional', label: '有條件免費', color: 'bg-conditional' },
-            { value: 'none', label: '無或已結束', color: 'bg-none' },
-          ]"
-          :key="s.value"
-          class="flex-1 cursor-pointer"
-        >
-          <input
-            type="radio"
-            v-model="status"
-            :value="s.value"
-            class="peer sr-only"
-          />
-          <div
-            :class="[
-              'text-center py-2 rounded-lg text-sm font-medium border-2 transition-all',
-              'border-gray-200 text-gray-600 peer-checked:border-gray-900 peer-checked:text-gray-900',
-            ]"
-          >
-            <span :class="['inline-block w-2 h-2 rounded-full mr-1', s.color]" />
-            {{ s.label }}
-          </div>
-        </label>
-      </div>
-    </div>
-
-    <div>
-      <label class="block text-sm font-medium text-gray-700 mb-1">領取條件 / 說明{{ status === 'conditional' ? ' *' : '' }}</label>
-      <textarea
-        v-model="condition"
-        rows="3"
-        placeholder="例如：訂閱花遊工作室頻道可拿扇子、明信片；或參加完集章任務可拿 Red Bull"
-        :required="status === 'conditional'"
-        class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
-      ></textarea>
-    </div>
-
-    <div>
-      <label class="block text-sm font-medium text-gray-700 mb-1">限量 / 數量（可選）</label>
-      <input
-        v-model="quantity"
-        type="text"
-        placeholder="例如：每日限量 100 份"
-        class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
-      />
-    </div>
-
-    <div class="grid grid-cols-2 gap-3">
-      <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">署名（可匿名）</label>
-        <input
-          v-model="editorName"
-          type="text"
-          placeholder="你的暱稱"
-          class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
-        />
-      </div>
-      <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">編輯備註（可選）</label>
-        <input
-          v-model="note"
-          type="text"
-          placeholder="例如：親測 14:00 還有"
-          class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
-        />
-      </div>
-    </div>
-
-    <div class="flex gap-3 pt-2">
-      <button
-        type="button"
-        @click="emit('cancel')"
-        class="flex-1 py-2.5 rounded-xl border border-gray-300 text-gray-700 font-medium text-sm"
-      >
-        取消
-      </button>
-      <button
-        type="submit"
-        class="flex-1 py-2.5 rounded-xl bg-gray-900 text-white font-medium text-sm"
-      >
-        {{ initialPrize ? '更新' : '新增' }}獎品
-      </button>
-    </div>
+    <div class="form-actions"><button type="button" class="secondary-button" @click="emit('cancel')">取消</button><button type="submit" class="primary-button">{{ initialPrize ? '儲存變更' : '送出情報' }}</button></div>
   </form>
 </template>

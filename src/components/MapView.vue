@@ -1,16 +1,10 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, watch } from 'vue'
-import type { Booth, FilterType } from '../types'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { mapBoundaryPaths, mapLandmarks, mapWalkwayPaths } from '../data/mapObjects'
+import type { Booth, FilterType, LandmarkType, PrizeStatus } from '../types'
 
-const props = defineProps<{
-  booths: Booth[]
-  selectedId?: number | null
-  filter: FilterType
-}>()
-
-const emit = defineEmits<{
-  select: [id: number]
-}>()
+const props = defineProps<{ booths: Booth[]; selectedId?: number | null; filter: FilterType }>()
+const emit = defineEmits<{ select: [id: number] }>()
 
 const mapWrapper = ref<HTMLDivElement | null>(null)
 const scale = ref(1)
@@ -19,210 +13,98 @@ const panY = ref(0)
 const isPanning = ref(false)
 const touchStart = ref({ x: 0, y: 0, panX: 0, panY: 0 })
 const lastTouchDistance = ref(0)
+const mapWidth = 701.6
+const mapHeight = 992.1
+const aspectRatio = mapHeight / mapWidth
 
-const naturalWidth = 7016
-const naturalHeight = 9921
-const aspectRatio = naturalHeight / naturalWidth
-
-function effectiveStatus(booth: Booth): 'free' | 'conditional' | 'none' {
+function effectiveStatus(booth: Booth): PrizeStatus {
   const prizes = booth.prizes ?? []
-  if (prizes.some((p) => p.status === 'free')) return 'free'
-  if (prizes.some((p) => p.status === 'conditional')) return 'conditional'
+  if (prizes.some((prize) => prize.status === 'free')) return 'free'
+  if (prizes.some((prize) => prize.status === 'conditional')) return 'conditional'
   return 'none'
 }
 
-const visibleBooths = computed(() => {
-  if (props.filter === 'all') return props.booths
-  return props.booths.filter((b) => effectiveStatus(b) === props.filter)
-})
+const visibleBooths = computed(() => props.filter === 'all' ? props.booths : props.booths.filter((booth) => effectiveStatus(booth) === props.filter))
+const filterLabel = computed(() => ({ all: '所有攤位', free: '免費贈品', conditional: '條件贈品' })[props.filter])
 
-function hotspotClasses(status: ReturnType<typeof effectiveStatus>) {
-  const base =
-    'absolute rounded-sm border cursor-pointer flex items-center justify-center overflow-hidden'
-  switch (status) {
-    case 'free':
-      return `${base} bg-green-500/30 border-green-500 hover:bg-green-500/40`
-    case 'conditional':
-      return `${base} bg-amber-500/30 border-amber-500 hover:bg-amber-500/40`
-    case 'none':
-    default:
-      return `${base} bg-gray-400/20 border-gray-400 hover:bg-gray-400/30`
-  }
-}
-
-function handleClick(id: number) {
-  emit('select', id)
-}
+function boothFill(status: PrizeStatus) { return ({ free: '#ff4e9b', conditional: '#ffbd3f', none: '#4d6280' })[status] }
+function boothStroke(status: PrizeStatus) { return ({ free: '#8e1b54', conditional: '#8f5600', none: '#273a58' })[status] }
+function landmarkFill(type: LandmarkType) { return ({ entrance: '#55e6d0', ticket: '#9874ff', restroom: '#b7c6e7', atm: '#ffbd3f', stage: '#ff667d', service: '#63b5ff', zone: '#213657' })[type] }
+function landmarkText(type: LandmarkType) { return ({ entrance: '入口', ticket: '售票', restroom: '洗手間', atm: 'ATM', stage: '舞台', service: '服務台', zone: '展區' })[type] }
+function shouldShowBoothLabel(booth: Booth) { return booth.bbox.w >= 4.5 && booth.bbox.h >= 2.2 }
+function handleClick(id: number) { emit('select', id) }
 
 function fitToScreen() {
   if (!mapWrapper.value) return
-  const wrapperW = mapWrapper.value.clientWidth
-  const wrapperH = mapWrapper.value.clientHeight
-  const wrapperRatio = wrapperH / wrapperW
-
-  // Fit entire map inside wrapper (like object-contain)
-  if (aspectRatio > wrapperRatio) {
-    scale.value = wrapperH / naturalHeight
-  } else {
-    scale.value = wrapperW / naturalWidth
-  }
+  const wrapperRatio = mapWrapper.value.clientHeight / mapWrapper.value.clientWidth
+  scale.value = aspectRatio > wrapperRatio ? mapWrapper.value.clientHeight / mapHeight : mapWrapper.value.clientWidth / mapWidth
   panX.value = 0
   panY.value = 0
-}
-
-function onWheel(e: WheelEvent) {
-  e.preventDefault()
-  const delta = e.deltaY > 0 ? -0.1 : 0.1
-  zoomAt(e.clientX, e.clientY, delta)
 }
 
 function zoomAt(clientX: number, clientY: number, delta: number) {
   if (!mapWrapper.value) return
   const rect = mapWrapper.value.getBoundingClientRect()
-  const x = clientX - rect.left - rect.width / 2 - panX.value
-  const y = clientY - rect.top - rect.height / 2 - panY.value
-  const oldScale = scale.value
-  const newScale = Math.max(0.3, Math.min(4, oldScale + delta))
-
-  panX.value = (clientX - rect.left - rect.width / 2) - (x / oldScale) * newScale
-  panY.value = (clientY - rect.top - rect.height / 2) - (y / oldScale) * newScale
-  scale.value = newScale
+  const localX = clientX - rect.left - rect.width / 2
+  const localY = clientY - rect.top - rect.height / 2
+  const mapX = localX - panX.value
+  const mapY = localY - panY.value
+  const nextScale = Math.max(0.3, Math.min(6, scale.value + delta))
+  panX.value = localX - (mapX / scale.value) * nextScale
+  panY.value = localY - (mapY / scale.value) * nextScale
+  scale.value = nextScale
 }
 
-function onTouchStart(e: TouchEvent) {
-  if (e.touches.length === 1) {
-    isPanning.value = true
-    touchStart.value = {
-      x: e.touches[0].clientX,
-      y: e.touches[0].clientY,
-      panX: panX.value,
-      panY: panY.value,
-    }
-  } else if (e.touches.length === 2) {
-    isPanning.value = false
-    const t1 = e.touches[0]
-    const t2 = e.touches[1]
-    lastTouchDistance.value = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY)
-  }
+function onWheel(event: WheelEvent) { event.preventDefault(); zoomAt(event.clientX, event.clientY, event.deltaY > 0 ? -0.1 : 0.1) }
+function onTouchStart(event: TouchEvent) {
+  if (event.touches.length === 1) { isPanning.value = true; touchStart.value = { x: event.touches[0].clientX, y: event.touches[0].clientY, panX: panX.value, panY: panY.value }; return }
+  if (event.touches.length === 2) { isPanning.value = false; lastTouchDistance.value = Math.hypot(event.touches[1].clientX - event.touches[0].clientX, event.touches[1].clientY - event.touches[0].clientY) }
 }
-
-function onTouchMove(e: TouchEvent) {
-  e.preventDefault()
-  if (e.touches.length === 1 && isPanning.value) {
-    const dx = e.touches[0].clientX - touchStart.value.x
-    const dy = e.touches[0].clientY - touchStart.value.y
-    panX.value = touchStart.value.panX + dx
-    panY.value = touchStart.value.panY + dy
-  } else if (e.touches.length === 2) {
-    const t1 = e.touches[0]
-    const t2 = e.touches[1]
-    const distance = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY)
-    if (lastTouchDistance.value > 0) {
-      const delta = (distance - lastTouchDistance.value) / 300
-      const centerX = (t1.clientX + t2.clientX) / 2
-      const centerY = (t1.clientY + t2.clientY) / 2
-      zoomAt(centerX, centerY, delta)
-    }
+function onTouchMove(event: TouchEvent) {
+  event.preventDefault()
+  if (event.touches.length === 1 && isPanning.value) { panX.value = touchStart.value.panX + event.touches[0].clientX - touchStart.value.x; panY.value = touchStart.value.panY + event.touches[0].clientY - touchStart.value.y; return }
+  if (event.touches.length === 2) {
+    const distance = Math.hypot(event.touches[1].clientX - event.touches[0].clientX, event.touches[1].clientY - event.touches[0].clientY)
+    if (lastTouchDistance.value > 0) zoomAt((event.touches[0].clientX + event.touches[1].clientX) / 2, (event.touches[0].clientY + event.touches[1].clientY) / 2, (distance - lastTouchDistance.value) / 300)
     lastTouchDistance.value = distance
   }
 }
-
-function onTouchEnd() {
-  isPanning.value = false
-  lastTouchDistance.value = 0
-}
-
+function onTouchEnd() { isPanning.value = false; lastTouchDistance.value = 0 }
 let startPan = { x: 0, y: 0, panX: 0, panY: 0 }
-function onMouseDown(e: MouseEvent) {
-  if (e.button === 1 || e.button === 2) {
-    startPan = { x: e.clientX, y: e.clientY, panX: panX.value, panY: panY.value }
-    window.addEventListener('mousemove', onMousePan)
-    window.addEventListener('mouseup', onMouseUp)
-  }
+function onMouseDown(event: MouseEvent) {
+  if (event.button !== 1 && event.button !== 2) return
+  startPan = { x: event.clientX, y: event.clientY, panX: panX.value, panY: panY.value }
+  window.addEventListener('mousemove', onMousePan)
+  window.addEventListener('mouseup', onMouseUp)
 }
+function onMousePan(event: MouseEvent) { panX.value = startPan.panX + event.clientX - startPan.x; panY.value = startPan.panY + event.clientY - startPan.y }
+function onMouseUp() { window.removeEventListener('mousemove', onMousePan); window.removeEventListener('mouseup', onMouseUp) }
 
-function onMousePan(e: MouseEvent) {
-  panX.value = startPan.panX + e.clientX - startPan.x
-  panY.value = startPan.panY + e.clientY - startPan.y
-}
-
-function onMouseUp() {
-  window.removeEventListener('mousemove', onMousePan)
-  window.removeEventListener('mouseup', onMouseUp)
-}
-
-onMounted(() => {
-  fitToScreen()
-  window.addEventListener('resize', fitToScreen)
-})
-
-watch(() => props.booths.length, () => {
-  if (scale.value === 1 && panX.value === 0 && panY.value === 0) {
-    fitToScreen()
-  }
-})
+onMounted(() => { fitToScreen(); window.addEventListener('resize', fitToScreen) })
+onBeforeUnmount(() => { window.removeEventListener('resize', fitToScreen); window.removeEventListener('mousemove', onMousePan); window.removeEventListener('mouseup', onMouseUp) })
+watch(() => props.booths.length, () => { if (scale.value === 1 && panX.value === 0 && panY.value === 0) fitToScreen() })
 </script>
 
 <template>
-  <div
-    ref="mapWrapper"
-    class="relative w-full h-full overflow-hidden bg-gray-900 select-none touch-none"
-    @wheel="onWheel"
-    @touchstart="onTouchStart"
-    @touchmove="onTouchMove"
-    @touchend="onTouchEnd"
-    @mousedown="onMouseDown"
-  >
-    <div
-      class="absolute top-1/2 left-1/2 will-change-transform"
-      :style="{
-        width: `${naturalWidth}px`,
-        height: `${naturalHeight}px`,
-        transform: `translate(calc(-50% + ${panX}px), calc(-50% + ${panY}px)) scale(${scale})`,
-      }"
-    >
-      <img
-        src="/map.jpg"
-        alt="漫博會場地圖"
-        class="absolute inset-0 w-full h-full object-fill pointer-events-none"
-        draggable="false"
-      />
-
-      <div
-        v-for="booth in visibleBooths"
-        :key="booth.id"
-        :class="[
-          hotspotClasses(effectiveStatus(booth)),
-          selectedId === booth.id ? 'ring-2 ring-white shadow-lg z-10' : '',
-        ]"
-        :style="{
-          left: `${booth.bbox.x}%`,
-          top: `${booth.bbox.y}%`,
-          width: `${booth.bbox.w}%`,
-          height: `${booth.bbox.h}%`,
-        }"
-        @click.stop="handleClick(booth.id)"
-      >
-        <div
-          class="absolute top-1 right-1"
-          v-if="effectiveStatus(booth) !== 'none'"
-        >
-          <div
-            class="w-2.5 h-2.5 rounded-full shadow"
-            :class="{
-              'bg-green-500': effectiveStatus(booth) === 'free',
-              'bg-amber-500': effectiveStatus(booth) === 'conditional',
-              'bg-gray-400': effectiveStatus(booth) === 'none',
-            }"
-          />
-        </div>
-        <span
-          v-if="booth.bbox.w >= 5 && booth.bbox.h >= 3"
-          class="text-[8px] sm:text-[10px] leading-tight text-center px-0.5 text-white font-semibold drop-shadow-[0_1px_1px_rgba(0,0,0,0.8)] pointer-events-none line-clamp-2"
-        >
-          {{ booth.name }}
-        </span>
-      </div>
+  <div ref="mapWrapper" class="expo-map" @wheel="onWheel" @touchstart="onTouchStart" @touchmove="onTouchMove" @touchend="onTouchEnd" @mousedown="onMouseDown" @contextmenu.prevent>
+    <div class="map-grid" aria-hidden="true"></div>
+    <div class="map-canvas" :style="{ width: `${mapWidth}px`, height: `${mapHeight}px`, transform: `translate(calc(-50% + ${panX}px), calc(-50% + ${panY}px)) scale(${scale})` }">
+      <svg class="h-full w-full overflow-visible" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="2026 漫畫博覽會攤位探索地圖">
+        <rect width="100" height="100" fill="#102544" />
+        <path v-for="path in mapBoundaryPaths" :key="path.id" :d="path.d" fill="#eaf0f7" stroke="#183252" stroke-width="0.7" stroke-linejoin="round" />
+        <path v-for="path in mapWalkwayPaths" :key="path.id" :d="path.d" fill="none" stroke="#c3d2df" stroke-width="1.15" stroke-linecap="round" stroke-dasharray="0.8 1" />
+        <g v-for="landmark in mapLandmarks" :key="landmark.id" class="pointer-events-none">
+          <rect :x="landmark.bbox.x" :y="landmark.bbox.y" :width="landmark.bbox.w" :height="landmark.bbox.h" rx="0.45" :fill="landmarkFill(landmark.type)" stroke="#17304f" stroke-width="0.25" />
+          <foreignObject :x="landmark.bbox.x" :y="landmark.bbox.y" :width="landmark.bbox.w" :height="landmark.bbox.h"><div xmlns="http://www.w3.org/1999/xhtml" class="landmark-label">{{ landmarkText(landmark.type) }}</div></foreignObject>
+        </g>
+        <g v-for="booth in visibleBooths" :key="booth.id" class="booth-hotspot" :class="{ 'is-selected': selectedId === booth.id }" tabindex="0" role="button" :aria-label="`選擇攤位 ${booth.name}，${effectiveStatus(booth) === 'free' ? '有免費贈品' : effectiveStatus(booth) === 'conditional' ? '有條件贈品' : '暫無贈品'}`" @click.stop="handleClick(booth.id)" @keydown.enter.prevent="handleClick(booth.id)" @keydown.space.prevent="handleClick(booth.id)">
+          <rect :x="booth.bbox.x" :y="booth.bbox.y" :width="booth.bbox.w" :height="booth.bbox.h" rx="0.5" :fill="boothFill(effectiveStatus(booth))" :stroke="selectedId === booth.id ? '#ffffff' : boothStroke(effectiveStatus(booth))" :stroke-width="selectedId === booth.id ? 0.75 : 0.3" vector-effect="non-scaling-stroke" />
+          <circle v-if="effectiveStatus(booth) !== 'none'" :cx="booth.bbox.x + booth.bbox.w - 0.9" :cy="booth.bbox.y + 0.9" r="0.7" fill="#ffffff" opacity="0.95" />
+          <foreignObject v-if="shouldShowBoothLabel(booth)" :x="booth.bbox.x" :y="booth.bbox.y" :width="booth.bbox.w" :height="booth.bbox.h" pointer-events="none"><div xmlns="http://www.w3.org/1999/xhtml" class="booth-label">{{ booth.name }}</div></foreignObject>
+        </g>
+      </svg>
     </div>
+    <aside class="map-key" aria-label="地圖圖例"><p><span class="map-key__mark">漫博 2026</span> {{ filterLabel }}</p><div><span class="key-item key-item--free">免費</span><span class="key-item key-item--conditional">有條件</span><span class="key-item key-item--none">一般</span></div></aside>
+    <div class="map-controls" aria-label="地圖縮放控制"><button type="button" aria-label="放大地圖" @click="zoomAt(mapWrapper?.getBoundingClientRect().left ?? 0, mapWrapper?.getBoundingClientRect().top ?? 0, 0.2)">+</button><button type="button" aria-label="縮小地圖" @click="zoomAt(mapWrapper?.getBoundingClientRect().left ?? 0, mapWrapper?.getBoundingClientRect().top ?? 0, -0.2)">−</button><button type="button" class="map-fit" aria-label="回到適合畫面大小" @click="fitToScreen">⌖</button></div>
   </div>
 </template>
